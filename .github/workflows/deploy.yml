@@ -1,0 +1,90 @@
+name: Build, Deploy & Notify
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-and-push:
+    name: Build and Push Docker Image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Log in to Docker Hub
+        run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+
+      - name: Build Docker image
+        run: docker build -t ${{ secrets.DOCKER_USERNAME }}/github-actions-flask:latest .
+
+      - name: Push Docker image
+        run: docker push ${{ secrets.DOCKER_USERNAME }}/github-actions-flask:latest
+
+  deploy:
+    name: Deploy and Validate App
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pull Docker image
+        run: docker pull ${{ secrets.DOCKER_USERNAME }}/github-actions-flask:latest
+
+      - name: Run Docker container
+        run: docker run -d -p 5000:5000 --name flask_app ${{ secrets.DOCKER_USERNAME }}/github-actions-flask:latest
+
+      - name: Wait for app to start
+        run: sleep 10
+
+      - name: Validate application is running
+        id: healthcheck
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5000)
+          echo "Status code: $STATUS"
+          if [ "$STATUS" != "200" ]; then
+            echo "App failed to start"
+            exit 1
+          fi
+
+  notify:
+    name: Send Email Notification
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Email
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.EMAIL_USERNAME }}
+          password: ${{ secrets.EMAIL_PASSWORD }}
+          subject: GitHub Actions Deployment Status
+          to: your-email@example.com
+          from: GitHub Actions <${{ secrets.EMAIL_USERNAME }}>
+          body: |
+            ✅ Deployment completed successfully!
+            Repository: ${{ github.repository }}
+            Workflow: ${{ github.workflow }}
+            Commit: ${{ github.sha }}
+
+    if: ${{ success() }}
+
+  notify-failure:
+    name: Send Email on Failure
+    needs: [build-and-push, deploy]
+    if: ${{ failure() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Failure Email
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.EMAIL_USERNAME }}
+          password: ${{ secrets.EMAIL_PASSWORD }}
+          subject: ❌ Deployment Failed!
+          to: your-email@example.com
+          from: GitHub Actions <${{ secrets.EMAIL_USERNAME }}>
+          body: |
+            ❌ Deployment failed.
+            Please check logs for more information.
